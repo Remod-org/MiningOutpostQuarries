@@ -27,19 +27,25 @@ using Facepunch.Extend;
 
 namespace Oxide.Plugins
 {
-    [Info("MiningOutpostQuarries", "RFC1920", "1.0.1")]
+    [Info("MiningOutpostQuarries", "RFC1920", "1.0.2")]
     [Description("Spawn quarries next to MiningOutposts just like the good old days")]
     internal class MiningOutpostQuarries : RustPlugin
     {
         private ConfigData configData;
         public static MiningOutpostQuarries Instance;
-        public List<uint> Quarries = new List<uint>();
         private static SortedDictionary<string, Vector3> monPos = new SortedDictionary<string, Vector3>();
         private static SortedDictionary<string, Quaternion> monRot = new SortedDictionary<string, Quaternion>();
         private static SortedDictionary<string, Vector3> monSize = new SortedDictionary<string, Vector3>();
+        private static Dictionary<uint, Quarry> Quarries = new Dictionary<uint, Quarry>();
 
         private const string quarryprefab = "assets/prefabs/deployable/quarry/mining_quarry.prefab";
         private const string permUse = "miningoutpostquarries.use";
+
+        private class Quarry
+        {
+            public Vector3 position;
+            public Quaternion rotation;
+        }
 
         protected override void LoadDefaultMessages()
         {
@@ -53,6 +59,7 @@ namespace Oxide.Plugins
         {
             permission.RegisterPermission(permUse, this);
             LoadConfigVariables();
+            LoadData();
 
             Instance = this;
 
@@ -67,9 +74,9 @@ namespace Oxide.Plugins
 
         private void Unload()
         {
-            foreach (uint quarry in Quarries)
+            foreach (KeyValuePair<uint, Quarry> quarry in Quarries)
             {
-                BaseNetworkable quarryObj = BaseNetworkable.serverEntities.Find(quarry);
+                BaseNetworkable quarryObj = BaseNetworkable.serverEntities.Find(quarry.Key);
                 if (quarryObj == null) continue;
                 Vector3 loc = quarryObj.transform.position;
                 UnityEngine.Object.DestroyImmediate(quarryObj, true);
@@ -123,28 +130,41 @@ namespace Oxide.Plugins
             Config.WriteObject(config, true);
         }
 
-        private bool BadLocation(Vector3 location)
+        private void LoadData()
+        {
+            Quarries = Interface.Oxide.DataFileSystem.ReadObject<Dictionary<uint, Quarry>>(Name + "/quarries");
+        }
+
+        private void SaveData()
+        {
+            Interface.Oxide.DataFileSystem.WriteObject(Name + "/quarries", Quarries);
+        }
+
+        private bool BadLocation(Vector3 loc)
         {
             // Avoid placing in a rock or foundation, water, etc.
             int layerMask = LayerMask.GetMask("Construction", "World", "Water", "Road");
             RaycastHit hit;
-            if (Physics.Raycast(new Ray(location, Vector3.down), out hit, 6f, layerMask))
+            foreach (Vector3 location in new List<Vector3>() { loc, loc + new Vector3(5, 0, 0), loc + new Vector3(0, 0, 5) })
             {
-                if (!hit.GetCollider().material.name.Contains("Grass"))
+                if (Physics.Raycast(new Ray(location, Vector3.down), out hit, 6f, layerMask))
                 {
-                    DoLog($"Found {hit.GetCollider().material.name} {hit.distance}f below this location");
+                    if (!hit.GetCollider().material.name.Contains("Grass"))
+                    {
+                        DoLog($"Found {hit.GetCollider().material.name} {hit.distance}f below this location");
+                        return true;
+                    }
+                }
+                else if (Physics.Raycast(new Ray(location, Vector3.up), out hit, 6f, layerMask))
+                {
+                    DoLog($"Found {hit.GetCollider().material.name} {hit.distance}f above this location");
                     return true;
                 }
-            }
-            else if (Physics.Raycast(new Ray(location, Vector3.up), out hit, 6f, layerMask))
-            {
-                DoLog($"Found {hit.GetCollider().material.name} {hit.distance}f above this location");
-                return true;
-            }
-            else if (Physics.Raycast(new Ray(location, Vector3.forward), out hit, 15f, layerMask))
-            {
-                DoLog($"Found {hit.GetCollider().material.name} at {hit.distance}f next to this location");
-                return true;
+                else if (Physics.Raycast(new Ray(location, Vector3.forward), out hit, 15f, layerMask))
+                {
+                    DoLog($"Found {hit.GetCollider().material.name} at {hit.distance}f next to this location");
+                    return true;
+                }
             }
             return false;
         }
@@ -152,6 +172,28 @@ namespace Oxide.Plugins
         private void BuildQuarries()
         {
             int spawned = 0;
+            if (Quarries.Count > 0)
+            {
+                DoLog("Spawning quarries from memory.");
+                foreach (KeyValuePair<uint, Quarry> quarry in Quarries)
+                {
+                    BaseEntity quarryEnt = GameManager.server.CreateEntity(quarryprefab, quarry.Value.position, quarry.Value.rotation, true);
+                    quarryEnt.Spawn();
+                    MiningQuarry mq = quarryEnt as MiningQuarry;
+                    mq.canExtractLiquid = true;
+                    mq.canExtractSolid = true;
+
+                    if (quarryEnt == null)
+                    {
+                        DoLog($"Unable to spawn quarry at {quarry.Value.position}");
+                        continue;
+                    }
+                    spawned++;
+                }
+                DoLog($"Spawned {spawned} quarries!");
+                return;
+            }
+
             foreach (KeyValuePair<string, Vector3> warehouse in monPos)
             {
                 if (spawned > configData.Options.maxQuarries) break;
@@ -170,7 +212,8 @@ namespace Oxide.Plugins
                     if (BadLocation(newPos)) continue;
 
                     DoLog("Good choice, spawning quarry...");
-                    BaseEntity quarryEnt = GameManager.server.CreateEntity(quarryprefab, newPos, monRot[whseName] *= Quaternion.Euler(0, 90, 0), true);
+                    Quaternion newRot = monRot[whseName] *= Quaternion.Euler(0, 90, 0);
+                    BaseEntity quarryEnt = GameManager.server.CreateEntity(quarryprefab, newPos, newRot, true);
                     quarryEnt.Spawn();
                     MiningQuarry mq = quarryEnt as MiningQuarry;
                     mq.canExtractLiquid = true;
@@ -183,11 +226,16 @@ namespace Oxide.Plugins
                     }
                     //quarry.FindSuitableParent();
                     DoLog("Adding to list");
-                    Quarries.Add(quarryEnt.net.ID);
+                    Quarries.Add(quarryEnt.net.ID, new Quarry()
+                    {
+                        position = newPos,
+                        rotation = newRot
+                    });
                     spawned++;
                     break;
                 }
             }
+            SaveData();
             DoLog($"Spawned {spawned} quarries!");
         }
 
