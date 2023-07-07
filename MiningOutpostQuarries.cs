@@ -27,7 +27,7 @@ using Facepunch.Extend;
 
 namespace Oxide.Plugins
 {
-    [Info("MiningOutpostQuarries", "RFC1920", "1.0.2")]
+    [Info("MiningOutpostQuarries", "RFC1920", "1.0.3")]
     [Description("Spawn quarries next to MiningOutposts just like the good old days")]
     internal class MiningOutpostQuarries : RustPlugin
     {
@@ -76,7 +76,7 @@ namespace Oxide.Plugins
         {
             foreach (KeyValuePair<uint, Quarry> quarry in Quarries)
             {
-                BaseNetworkable quarryObj = BaseNetworkable.serverEntities.Find(quarry.Key);
+                BaseNetworkable quarryObj = BaseNetworkable.serverEntities.Find(new NetworkableId(quarry.Key));
                 if (quarryObj == null) continue;
                 Vector3 loc = quarryObj.transform.position;
                 UnityEngine.Object.DestroyImmediate(quarryObj, true);
@@ -226,7 +226,7 @@ namespace Oxide.Plugins
                     }
                     //quarry.FindSuitableParent();
                     DoLog("Adding to list");
-                    Quarries.Add(quarryEnt.net.ID, new Quarry()
+                    Quarries.Add((uint)quarryEnt.net.ID.Value, new Quarry()
                     {
                         position = newPos,
                         rotation = newRot
